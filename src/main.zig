@@ -175,6 +175,7 @@ fn modeWatch(sensor: Sensor, format: Format, interval_ms: u64) u8 {
             std.Thread.sleep(interval_ms * std.time.ns_per_ms);
             continue;
         };
+        // Only print when the angle changes to keep output clean for piping
         if (last_angle == null or last_angle.? != angle) {
             outputAngle(angle, format);
             last_angle = angle;
@@ -202,6 +203,8 @@ fn modeWaitUntil(sensor: Sensor, format: Format, threshold: Threshold, interval_
             continue;
         };
 
+        // Auto-direction: infer wait direction from where the lid is now
+        // (e.g. current=90, target=140 → wait for above)
         if (wait_above == null) {
             if (angle == threshold.value) {
                 outputAngle(angle, format);

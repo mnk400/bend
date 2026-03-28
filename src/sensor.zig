@@ -13,6 +13,7 @@ pub const Error = error{
     ReportTooShort,
 };
 
+// Apple lid-angle HID sensor identifiers (vendor=Apple, product/usage unique to this sensor)
 const vendor_id: c_int = 0x05AC;
 const product_id: c_int = 0x8104;
 const usage_page: c_int = 0x0020;
@@ -34,8 +35,9 @@ fn readReport(device: *anyopaque) Error!u16 {
     );
 
     if (result != io.kIOReturnSuccess) return error.ReportReadFailed;
-    if (length < 3) return error.ReportTooShort;
+    if (length < 3) return error.ReportTooShort; // need bytes 1-2
 
+    // Angle is a little-endian u16 at bytes 1-2 (byte 0 is the report ID)
     return @as(u16, report[2]) << 8 | @as(u16, report[1]);
 }
 
