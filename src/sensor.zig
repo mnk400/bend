@@ -13,7 +13,6 @@ pub const Error = error{
     ReportTooShort,
 };
 
-// Apple lid angle sensor identifiers
 const vendor_id: c_int = 0x05AC;
 const product_id: c_int = 0x8104;
 const usage_page: c_int = 0x0020;
@@ -47,7 +46,10 @@ pub const Sensor = struct {
     pub fn open() Error!Sensor {
         const manager = io.IOHIDManagerCreate(null, io.kIOHIDOptionsTypeNone) orelse
             return error.ManagerCreateFailed;
-        errdefer _ = io.IOHIDManagerClose(manager, io.kIOHIDOptionsTypeNone);
+        errdefer {
+            _ = io.IOHIDManagerClose(manager, io.kIOHIDOptionsTypeNone);
+            io.CFRelease(manager);
+        }
 
         if (io.IOHIDManagerOpen(manager, io.kIOHIDOptionsTypeNone) != io.kIOReturnSuccess)
             return error.ManagerOpenFailed;
@@ -101,5 +103,6 @@ pub const Sensor = struct {
     pub fn close(self: Sensor) void {
         _ = io.IOHIDDeviceClose(self.device, io.kIOHIDOptionsTypeNone);
         _ = io.IOHIDManagerClose(self.manager, io.kIOHIDOptionsTypeNone);
+        io.CFRelease(self.manager);
     }
 };

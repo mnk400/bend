@@ -44,22 +44,25 @@ fn parseArgs(alloc: std.mem.Allocator) error{ MissingArgValue, InvalidArgValue, 
             args.mode = .watch;
         } else if (std.mem.eql(u8, arg, "--interval") or std.mem.eql(u8, arg, "-i")) {
             const val = iter.next() orelse return error.MissingArgValue;
-            const secs = std.fmt.parseFloat(f64, val) catch return error.InvalidArgValue;
-            args.interval_ms = @intFromFloat(secs * 1000);
+            args.interval_ms = parseSecsToMs(val) catch return error.InvalidArgValue;
         } else if (std.mem.eql(u8, arg, "--wait-until")) {
             args.mode = .wait_until;
             const val = iter.next() orelse return error.MissingArgValue;
             args.threshold = parseThreshold(val) orelse return error.InvalidArgValue;
         } else if (std.mem.eql(u8, arg, "--timeout")) {
             const val = iter.next() orelse return error.MissingArgValue;
-            const secs = std.fmt.parseFloat(f64, val) catch return error.InvalidArgValue;
-            args.timeout_ms = @intFromFloat(secs * 1000);
+            args.timeout_ms = parseSecsToMs(val) catch return error.InvalidArgValue;
         } else {
             return error.UnknownArg;
         }
     }
 
     return args;
+}
+
+fn parseSecsToMs(val: []const u8) error{InvalidArgValue}!u64 {
+    const secs = std.fmt.parseFloat(f64, val) catch return error.InvalidArgValue;
+    return @intFromFloat(secs * 1000);
 }
 
 fn parseThreshold(s: []const u8) ?Threshold {
@@ -181,7 +184,7 @@ fn modeWatch(sensor: Sensor, format: Format, interval_ms: u64) u8 {
 }
 
 fn modeWaitUntil(sensor: Sensor, format: Format, threshold: Threshold, interval_ms: u64, timeout_ms: ?u64) u8 {
-    var elapsed_ms: u64 = 0;
+    const start_ms = std.time.milliTimestamp();
     var wait_above: ?bool = switch (threshold.direction) {
         .above => true,
         .below => false,
@@ -190,12 +193,12 @@ fn modeWaitUntil(sensor: Sensor, format: Format, threshold: Threshold, interval_
 
     while (true) {
         if (timeout_ms) |t| {
-            if (elapsed_ms >= t) return exit_timeout;
+            const elapsed: u64 = @intCast(@max(0, std.time.milliTimestamp() - start_ms));
+            if (elapsed >= t) return exit_timeout;
         }
 
         const angle = sensor.read() catch {
             std.Thread.sleep(interval_ms * std.time.ns_per_ms);
-            elapsed_ms += interval_ms;
             continue;
         };
 
@@ -214,6 +217,5 @@ fn modeWaitUntil(sensor: Sensor, format: Format, threshold: Threshold, interval_
         }
 
         std.Thread.sleep(interval_ms * std.time.ns_per_ms);
-        elapsed_ms += interval_ms;
     }
 }
