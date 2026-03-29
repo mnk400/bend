@@ -1,0 +1,125 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - 'build.zig'
+      - 'build.zig.zon'
+
+jobs:
+  release:
+    runs-on: macos-14
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute version
+        id: get_tag
+        run: |
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+
+          VERSION=${LATEST_TAG#v}
+          IFS='.' read -r -a VERSION_PARTS <<< "$VERSION"
+          MAJOR=${VERSION_PARTS[0]:-0}
+          MINOR=${VERSION_PARTS[1]:-0}
+          PATCH=${VERSION_PARTS[2]:-0}
+          PATCH=$((PATCH + 1))
+
+          NEW_VERSION="v${MAJOR}.${MINOR}.${PATCH}"
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "version_number=${MAJOR}.${MINOR}.${PATCH}" >> $GITHUB_OUTPUT
+          echo "Previous: $LATEST_TAG  New: $NEW_VERSION"
+
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: "0.15.0"
+
+      - name: Build
+        run: |
+          VERSION="${{ steps.get_tag.outputs.version_number }}"
+          zig build -Dversion="$VERSION" -Doptimize=ReleaseSafe
+
+      - name: Create archive
+        id: archive
+        run: |
+          VERSION="${{ steps.get_tag.outputs.version_number }}"
+          ARCHIVE="bend-${VERSION}-aarch64-macos.tar.gz"
+          tar -czf "$ARCHIVE" -C zig-out/bin bend
+          echo "archive=$ARCHIVE" >> $GITHUB_OUTPUT
+
+      - name: Generate release notes
+        run: |
+          LATEST_TAG="${{ steps.get_tag.outputs.latest_tag }}"
+          if [ "$LATEST_TAG" = "v0.0.0" ]; then
+            echo "Initial release" > release_notes.txt
+          else
+            git log ${LATEST_TAG}..HEAD --pretty=format:"- %s" --no-merges > release_notes.txt
+          fi
+
+      - name: Create and push tag
+        run: |
+          NEW_VERSION="${{ steps.get_tag.outputs.new_version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$NEW_VERSION" -m "Release $NEW_VERSION"
+          git push origin "$NEW_VERSION"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.get_tag.outputs.new_version }}
+          name: Release ${{ steps.get_tag.outputs.new_version }}
+          body_path: release_notes.txt
+          files: ${{ steps.archive.outputs.archive }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update Homebrew formula
+        run: |
+          VERSION="${{ steps.get_tag.outputs.version_number }}"
+          ARCHIVE="${{ steps.archive.outputs.archive }}"
+          SHA256=$(shasum -a 256 "$ARCHIVE" | awk '{print $1}')
+          URL="https://github.com/mnk400/bend/releases/download/v${VERSION}/${ARCHIVE}"
+
+          echo "SHA256: $SHA256"
+
+          git clone https://github.com/mnk400/homebrew-tap.git /tmp/homebrew-tap
+          mkdir -p /tmp/homebrew-tap/Formula
+
+          {
+            printf 'class Bend < Formula\n'
+            printf '  desc "Read the MacBook lid angle sensor from the command line"\n'
+            printf '  homepage "https://github.com/mnk400/bend"\n'
+            printf '  version "%s"\n' "$VERSION"
+            printf '  license "MIT"\n'
+            printf '\n'
+            printf '  url "%s"\n' "$URL"
+            printf '  sha256 "%s"\n' "$SHA256"
+            printf '\n'
+            printf '  def install\n'
+            printf '    bin.install "bend"\n'
+            printf '  end\n'
+            printf '\n'
+            printf '  test do\n'
+            printf '    assert_match "bend #{version}", shell_output("#{bin}/bend --version")\n'
+            printf '  end\n'
+            printf 'end\n'
+          } > /tmp/homebrew-tap/Formula/bend.rb
+
+          cd /tmp/homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/bend.rb
+          git commit -m "bend ${VERSION}" || echo "No changes to commit"
+          git push https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/mnk400/homebrew-tap.git main
+        env:
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}

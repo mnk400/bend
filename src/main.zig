@@ -3,8 +3,9 @@
 
 const std = @import("std");
 const Sensor = @import("sensor.zig").Sensor;
+const build_options = @import("build_options");
 
-const version = "0.1.0";
+const version = build_options.version;
 
 const exit_ok = 0;
 const exit_sensor_error = 1;
