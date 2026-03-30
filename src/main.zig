@@ -81,18 +81,19 @@ fn parseThreshold(s: []const u8) ?Threshold {
     }
 }
 
-fn writeTo(file: std.fs.File, comptime fmt: []const u8, fmtargs: anytype) void {
+fn writeTo(file: std.fs.File, comptime fmt: []const u8, fmtargs: anytype) bool {
     var buf: [256]u8 = undefined;
-    const slice = std.fmt.bufPrint(&buf, fmt, fmtargs) catch return;
-    file.writeAll(slice) catch {};
+    const slice = std.fmt.bufPrint(&buf, fmt, fmtargs) catch return true;
+    file.writeAll(slice) catch return false;
+    return true;
 }
 
-fn out(comptime fmt: []const u8, fmtargs: anytype) void {
-    writeTo(std.fs.File.stdout(), fmt, fmtargs);
+fn out(comptime fmt: []const u8, fmtargs: anytype) bool {
+    return writeTo(std.fs.File.stdout(), fmt, fmtargs);
 }
 
 fn err(comptime fmt: []const u8, fmtargs: anytype) void {
-    writeTo(std.fs.File.stderr(), fmt, fmtargs);
+    _ = writeTo(std.fs.File.stderr(), fmt, fmtargs);
 }
 
 fn printUsage() void {
@@ -123,10 +124,10 @@ fn printUsage() void {
     std.fs.File.stdout().writeAll(usage) catch {};
 }
 
-fn outputAngle(angle: u16, format: Format) void {
-    switch (format) {
+fn outputAngle(angle: u16, format: Format) bool {
+    return switch (format) {
         .plain => out("{d}\n", .{angle}),
-    }
+    };
 }
 
 pub fn main() u8 {
@@ -145,7 +146,7 @@ pub fn main() u8 {
         return exit_ok;
     }
     if (args.show_version) {
-        out("bend {s}\n", .{version});
+        _ = out("bend {s}\n", .{version});
         return exit_ok;
     }
 
@@ -165,22 +166,17 @@ pub fn main() u8 {
 
 fn modeOneshot(sensor: Sensor, format: Format) u8 {
     const angle = sensor.read() catch return exit_sensor_error;
-    outputAngle(angle, format);
+    _ = outputAngle(angle, format);
     return exit_ok;
 }
 
 fn modeWatch(sensor: Sensor, format: Format, interval_ms: u64) u8 {
-    var last_angle: ?u16 = null;
     while (true) {
         const angle = sensor.read() catch {
             std.Thread.sleep(interval_ms * std.time.ns_per_ms);
             continue;
         };
-        // Only print when the angle changes to keep output clean for piping
-        if (last_angle == null or last_angle.? != angle) {
-            outputAngle(angle, format);
-            last_angle = angle;
-        }
+        if (!outputAngle(angle, format)) return exit_ok;
         std.Thread.sleep(interval_ms * std.time.ns_per_ms);
     }
 }
@@ -208,7 +204,7 @@ fn modeWaitUntil(sensor: Sensor, format: Format, threshold: Threshold, interval_
         // (e.g. current=90, target=140 → wait for above)
         if (wait_above == null) {
             if (angle == threshold.value) {
-                outputAngle(angle, format);
+                _ = outputAngle(angle, format);
                 return exit_ok;
             }
             wait_above = angle < threshold.value;
@@ -216,7 +212,7 @@ fn modeWaitUntil(sensor: Sensor, format: Format, threshold: Threshold, interval_
 
         const reached = if (wait_above.?) angle >= threshold.value else angle <= threshold.value;
         if (reached) {
-            outputAngle(angle, format);
+            _ = outputAngle(angle, format);
             return exit_ok;
         }
 
