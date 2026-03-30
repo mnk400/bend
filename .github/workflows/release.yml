@@ -97,13 +97,11 @@ jobs:
 
           {
             printf 'class Bend < Formula\n'
-            printf '  desc "Read the MacBook lid angle sensor from the command line"\n'
+            printf '  desc "Read the MacBook lid angle sensor from the command-line"\n'
             printf '  homepage "https://github.com/mnk400/bend"\n'
-            printf '  version "%s"\n' "$VERSION"
-            printf '  license "MIT"\n'
-            printf '\n'
             printf '  url "%s"\n' "$URL"
             printf '  sha256 "%s"\n' "$SHA256"
+            printf '  license "GPL-3.0-only"\n'
             printf '\n'
             printf '  def install\n'
             printf '    bin.install "bend"\n'
