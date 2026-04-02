@@ -9,6 +9,7 @@ const version = build_options.version;
 
 const exit_ok = 0;
 const exit_sensor_error = 1;
+const exit_usage = 2;
 const exit_timeout = 3;
 
 const Mode = enum { oneshot, watch, wait_until };
@@ -53,6 +54,8 @@ fn parseArgs(alloc: std.mem.Allocator) error{ MissingArgValue, InvalidArgValue, 
         } else if (std.mem.eql(u8, arg, "--timeout")) {
             const val = iter.next() orelse return error.MissingArgValue;
             args.timeout_ms = parseSecsToMs(val) catch return error.InvalidArgValue;
+        } else if (std.mem.eql(u8, arg, "--")) {
+            break;
         } else {
             return error.UnknownArg;
         }
@@ -118,6 +121,7 @@ fn printUsage() void {
         \\Exit codes:
         \\  0  Success
         \\  1  Sensor not found or unsupported hardware
+        \\  2  Invalid usage
         \\  3  Timeout (--wait-until with --timeout)
         \\
     ;
@@ -137,8 +141,8 @@ pub fn main() u8 {
             error.InvalidArgValue => "invalid argument value",
             error.UnknownArg => "unknown argument (see --help)",
         };
-        err("Error: {s}\n", .{msg});
-        return exit_sensor_error;
+        err("bend: {s}\n", .{msg});
+        return exit_usage;
     };
 
     if (args.help) {
