@@ -30,12 +30,15 @@ const Args = struct {
     show_version: bool = false,
 };
 
-fn parseArgs(alloc: std.mem.Allocator) error{ MissingArgValue, InvalidArgValue, UnknownArg }!Args {
+fn parseArgs(alloc: std.mem.Allocator) error{ MissingArgValue, InvalidArgValue, UnknownArg, ConflictingMode, TimeoutRequiresWaitUntil }!Args {
     var iter = std.process.argsWithAllocator(alloc) catch return error.InvalidArgValue;
     defer iter.deinit();
     _ = iter.next(); // skip argv[0]
 
     var args = Args{};
+    var has_watch = false;
+    var has_wait_until = false;
+    var has_timeout = false;
 
     while (iter.next()) |arg| {
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
@@ -44,14 +47,17 @@ fn parseArgs(alloc: std.mem.Allocator) error{ MissingArgValue, InvalidArgValue, 
             args.show_version = true;
         } else if (std.mem.eql(u8, arg, "--watch") or std.mem.eql(u8, arg, "-w")) {
             args.mode = .watch;
+            has_watch = true;
         } else if (std.mem.eql(u8, arg, "--interval") or std.mem.eql(u8, arg, "-i")) {
             const val = iter.next() orelse return error.MissingArgValue;
             args.interval_ms = parseSecsToMs(val) catch return error.InvalidArgValue;
         } else if (std.mem.eql(u8, arg, "--wait-until")) {
             args.mode = .wait_until;
+            has_wait_until = true;
             const val = iter.next() orelse return error.MissingArgValue;
             args.threshold = parseThreshold(val) orelse return error.InvalidArgValue;
         } else if (std.mem.eql(u8, arg, "--timeout")) {
+            has_timeout = true;
             const val = iter.next() orelse return error.MissingArgValue;
             args.timeout_ms = parseSecsToMs(val) catch return error.InvalidArgValue;
         } else if (std.mem.eql(u8, arg, "--")) {
@@ -60,6 +66,9 @@ fn parseArgs(alloc: std.mem.Allocator) error{ MissingArgValue, InvalidArgValue, 
             return error.UnknownArg;
         }
     }
+
+    if (has_watch and has_wait_until) return error.ConflictingMode;
+    if (has_timeout and !has_wait_until) return error.TimeoutRequiresWaitUntil;
 
     return args;
 }
@@ -140,6 +149,8 @@ pub fn main() u8 {
             error.MissingArgValue => "missing argument value",
             error.InvalidArgValue => "invalid argument value",
             error.UnknownArg => "unknown argument (see --help)",
+            error.ConflictingMode => "--watch and --wait-until cannot be used together",
+            error.TimeoutRequiresWaitUntil => "--timeout can only be used with --wait-until",
         };
         err("bend: {s}\n", .{msg});
         return exit_usage;
