@@ -25,6 +25,7 @@ Bend has the following modes:
 
 **Options**
 
+- `-d`, `--delta`: Show change in angle since last reading (use with `--watch`)
 - `-i`, `--interval`: Interval for polling angle reads in watch or wait mode (in seconds)
 - `--timeout`: Optional timeout in wait mode
 - `-h`, `--help`: Shows help

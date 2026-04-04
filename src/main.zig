@@ -26,11 +26,12 @@ const Args = struct {
     interval_ms: u64 = 500,
     threshold: ?Threshold = null,
     timeout_ms: ?u64 = null,
+    delta: bool = false,
     help: bool = false,
     show_version: bool = false,
 };
 
-fn parseArgs(alloc: std.mem.Allocator) error{ MissingArgValue, InvalidArgValue, UnknownArg, ConflictingMode, TimeoutRequiresWaitUntil }!Args {
+fn parseArgs(alloc: std.mem.Allocator) error{ MissingArgValue, InvalidArgValue, UnknownArg, ConflictingMode, TimeoutRequiresWaitUntil, DeltaRequiresWatch }!Args {
     var iter = std.process.argsWithAllocator(alloc) catch return error.InvalidArgValue;
     defer iter.deinit();
     _ = iter.next(); // skip argv[0]
@@ -39,6 +40,7 @@ fn parseArgs(alloc: std.mem.Allocator) error{ MissingArgValue, InvalidArgValue, 
     var has_watch = false;
     var has_wait_until = false;
     var has_timeout = false;
+    var has_delta = false;
 
     while (iter.next()) |arg| {
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
@@ -60,6 +62,9 @@ fn parseArgs(alloc: std.mem.Allocator) error{ MissingArgValue, InvalidArgValue, 
             has_timeout = true;
             const val = iter.next() orelse return error.MissingArgValue;
             args.timeout_ms = parseSecsToMs(val) catch return error.InvalidArgValue;
+        } else if (std.mem.eql(u8, arg, "--delta") or std.mem.eql(u8, arg, "-d")) {
+            args.delta = true;
+            has_delta = true;
         } else if (std.mem.eql(u8, arg, "--")) {
             break;
         } else {
@@ -69,6 +74,7 @@ fn parseArgs(alloc: std.mem.Allocator) error{ MissingArgValue, InvalidArgValue, 
 
     if (has_watch and has_wait_until) return error.ConflictingMode;
     if (has_timeout and !has_wait_until) return error.TimeoutRequiresWaitUntil;
+    if (has_delta and !has_watch) return error.DeltaRequiresWatch;
 
     return args;
 }
@@ -122,6 +128,7 @@ fn printUsage() void {
         \\                         140+ (force wait for >=140), 30- (force wait for <=30)
         \\
         \\Options:
+        \\  -d, --delta            Show change since last reading (use with --watch)
         \\  -i, --interval <secs>  Interval between readings (default: 0.5)
         \\  --timeout <secs>       Timeout for --wait-until (exit code 3)
         \\  -h, --help             Show this help
@@ -143,6 +150,15 @@ fn outputAngle(angle: u16, format: Format) bool {
     };
 }
 
+fn outputDelta(delta: i32, format: Format) bool {
+    return switch (format) {
+        .plain => if (delta > 0)
+            out("+{d}\n", .{delta})
+        else
+            out("{d}\n", .{delta}),
+    };
+}
+
 pub fn main() u8 {
     const args = parseArgs(std.heap.page_allocator) catch |e| {
         const msg: []const u8 = switch (e) {
@@ -151,6 +167,7 @@ pub fn main() u8 {
             error.UnknownArg => "unknown argument (see --help)",
             error.ConflictingMode => "--watch and --wait-until cannot be used together",
             error.TimeoutRequiresWaitUntil => "--timeout can only be used with --wait-until",
+            error.DeltaRequiresWatch => "--delta can only be used with --watch",
         };
         err("bend: {s}\n", .{msg});
         return exit_usage;
@@ -174,7 +191,7 @@ pub fn main() u8 {
 
     return switch (args.mode) {
         .oneshot => modeOneshot(sensor, args.format),
-        .watch => modeWatch(sensor, args.format, args.interval_ms),
+        .watch => modeWatch(sensor, args.format, args.interval_ms, args.delta),
         .wait_until => modeWaitUntil(sensor, args.format, args.threshold.?, args.interval_ms, args.timeout_ms),
     };
 }
@@ -185,13 +202,22 @@ fn modeOneshot(sensor: Sensor, format: Format) u8 {
     return exit_ok;
 }
 
-fn modeWatch(sensor: Sensor, format: Format, interval_ms: u64) u8 {
+fn modeWatch(sensor: Sensor, format: Format, interval_ms: u64, delta: bool) u8 {
+    var prev_angle: ?u16 = null;
     while (true) {
         const angle = sensor.read() catch {
             std.Thread.sleep(interval_ms * std.time.ns_per_ms);
             continue;
         };
-        if (!outputAngle(angle, format)) return exit_ok;
+        const ok = if (delta) blk: {
+            const d: i32 = if (prev_angle) |prev|
+                @as(i32, angle) - @as(i32, prev)
+            else
+                0;
+            prev_angle = angle;
+            break :blk outputDelta(d, format);
+        } else outputAngle(angle, format);
+        if (!ok) return exit_ok;
         std.Thread.sleep(interval_ms * std.time.ns_per_ms);
     }
 }
