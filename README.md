@@ -31,6 +31,8 @@ Bend has the following modes:
 - `-h`, `--help`: Shows help
 - `-v`, `--version`: Show version
 
+![](assets/demo.gif)
+
 ## Build from source
 
 Requires Zig 0.15+.
