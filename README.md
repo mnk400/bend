@@ -1,43 +1,49 @@
-# Bend
+# bend
 
-Bend lets you read the MacBook lid angle sensor, built in Zig.
-
-## Installation
-
-**Homebrew (recommended)**
-```bash
-brew install mnk400/tap/bend
-```
-
-**Shell script**
-```bash
-curl -fsSL https://raw.githubusercontent.com/mnk400/bend/main/install.sh | bash
-```
-
-> Requires Input Monitoring permission — grant it in System Settings → Privacy & Security.
-
-## Usage
-
-Bend has the following modes:
-- (default): Print the lid angle once and exit
-- (watch mode) `-w` or `--watch`: Print the lid angle continuously, a live feed
-- (wait mode) `--wait-until`: Block until angle reaches threshold, then exit
-
-**Options**
-
-- `-d`, `--delta`: Show change in angle since last reading (use with `--watch`)
-- `-i`, `--interval`: Interval for polling angle reads in watch or wait mode (in seconds)
-- `--timeout`: Optional timeout in wait mode
-- `-h`, `--help`: Shows help
-- `-v`, `--version`: Show version
+<!-- site:strip-start -->
+> Read the MacBook lid angle from the command line. Written in Zig.
+<!-- site:strip-end -->
 
 ![](assets/demo.gif)
 
-## Build from source
+## What is this
 
-Requires Zig 0.15+.
+MacBooks have a sensor that reports the angle of the lid hinge. macOS doesn't expose it as a number, 
+but bend does, via IOKit.
+
+Small native binary. Useful for scripting around lid position, triggering scripts when the lid moves past 
+a threshold, or just reading the current angle.
+
+<!-- site:strip-start -->
+## Install
 
 ```bash
-zig build                             # build to zig-out/bin/bend
-zig build run -- --watch --interval 0.3
+# Homebrew
+brew install mnk400/tap/bend
+
+# Or via shell script
+curl -fsSL https://raw.githubusercontent.com/mnk400/bend/main/install.sh | bash
 ```
+<!-- site:strip-end -->
+
+## Quick start
+
+```bash
+$ bend
+96
+
+# Live feed
+bend --watch
+
+# Block until the lid closes past 30°
+bend --wait-until 30-
+```
+
+## Documentation
+
+- [Usage](./docs/usage.md) — modes, options, threshold syntax, exit codes
+- [Build from source](./docs/build.md)
+
+## License
+
+MIT — see [LICENSE](./LICENSE).
