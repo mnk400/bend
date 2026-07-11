@@ -1,6 +1,7 @@
 // Sensor abstraction: device discovery, probing, angle reading
 // Created by Manik on March 26th 2026
 
+const std = @import("std");
 const io = @import("iokit.zig");
 
 pub const Error = error{
@@ -20,7 +21,6 @@ const usage_page: c_int = 0x0020;
 const usage: c_int = 0x008A;
 
 const report_len = 8;
-const max_devices = 16;
 
 fn readReport(device: *anyopaque) Error!u16 {
     var report: [report_len]u8 = .{0} ** report_len;
@@ -77,12 +77,17 @@ pub const Sensor = struct {
         const count: usize = @intCast(io.CFSetGetCount(device_set));
         if (count == 0) return error.NoDevicesFound;
 
-        var ptrs: [max_devices]?*anyopaque = .{null} ** max_devices;
-        io.CFSetGetValues(device_set, &ptrs);
+        // CFSetGetValues writes ALL `count` entries into the buffer, so it must be
+        // sized to `count` — a fixed-size stack buffer would overflow if the set
+        // ever held more devices than the buffer could hold.
+        const ptrs = std.heap.page_allocator.alloc(?*anyopaque, count) catch
+            return error.NoDevicesFound;
+        defer std.heap.page_allocator.free(ptrs);
+        @memset(ptrs, null);
+        io.CFSetGetValues(device_set, ptrs.ptr);
 
-        const n = @min(count, max_devices);
-        for (0..n) |i| {
-            const dev = ptrs[i] orelse continue;
+        for (ptrs) |maybe_dev| {
+            const dev = maybe_dev orelse continue;
 
             if (io.IOHIDDeviceOpen(dev, io.kIOHIDOptionsTypeNone) != io.kIOReturnSuccess)
                 continue;

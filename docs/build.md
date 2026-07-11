@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Zig 0.15+
+- Zig 0.16+
 - macOS (the lid sensor is Mac-specific; the binary uses IOKit)
 
 ## Build

@@ -5,6 +5,9 @@ const std = @import("std");
 const Sensor = @import("sensor.zig").Sensor;
 const build_options = @import("build_options");
 
+const Io = std.Io;
+const File = std.Io.File;
+
 const version = build_options.version;
 
 const exit_ok = 0;
@@ -31,10 +34,10 @@ const Args = struct {
     show_version: bool = false,
 };
 
-fn parseArgs(alloc: std.mem.Allocator) error{ MissingArgValue, InvalidArgValue, UnknownArg, ConflictingMode, TimeoutRequiresWaitUntil, DeltaRequiresWatch }!Args {
-    var iter = std.process.argsWithAllocator(alloc) catch return error.InvalidArgValue;
+fn parseArgs(argv: std.process.Args) error{ MissingArgValue, InvalidArgValue, UnknownArg, ConflictingMode, TimeoutRequiresWaitUntil, DeltaRequiresWatch }!Args {
+    var iter = argv.iterate();
     defer iter.deinit();
-    _ = iter.next(); // skip argv[0]
+    _ = iter.skip(); // skip argv[0]
 
     var args = Args{};
     var has_watch = false;
@@ -81,7 +84,13 @@ fn parseArgs(alloc: std.mem.Allocator) error{ MissingArgValue, InvalidArgValue, 
 
 fn parseSecsToMs(val: []const u8) error{InvalidArgValue}!u64 {
     const secs = std.fmt.parseFloat(f64, val) catch return error.InvalidArgValue;
-    return @intFromFloat(secs * 1000);
+    // Reject negative / NaN / inf / out-of-range before @intFromFloat, which is
+    // illegal behavior (panic in safe builds) for values that don't fit the target.
+    // Bound to i64 so downstream Duration/Timestamp math (which is signed) is safe.
+    if (!std.math.isFinite(secs) or secs < 0) return error.InvalidArgValue;
+    const ms = secs * 1000.0;
+    if (ms > @as(f64, @floatFromInt(std.math.maxInt(i64)))) return error.InvalidArgValue;
+    return @intFromFloat(ms);
 }
 
 fn parseThreshold(s: []const u8) ?Threshold {
@@ -99,22 +108,28 @@ fn parseThreshold(s: []const u8) ?Threshold {
     }
 }
 
-fn writeTo(file: std.fs.File, comptime fmt: []const u8, fmtargs: anytype) bool {
+fn writeTo(file: File, io: Io, comptime fmt: []const u8, fmtargs: anytype) bool {
     var buf: [256]u8 = undefined;
     const slice = std.fmt.bufPrint(&buf, fmt, fmtargs) catch return true;
-    file.writeAll(slice) catch return false;
+    file.writeStreamingAll(io, slice) catch return false;
     return true;
 }
 
-fn out(comptime fmt: []const u8, fmtargs: anytype) bool {
-    return writeTo(std.fs.File.stdout(), fmt, fmtargs);
+fn out(io: Io, comptime fmt: []const u8, fmtargs: anytype) bool {
+    return writeTo(File.stdout(), io, fmt, fmtargs);
 }
 
-fn err(comptime fmt: []const u8, fmtargs: anytype) void {
-    _ = writeTo(std.fs.File.stderr(), fmt, fmtargs);
+fn err(io: Io, comptime fmt: []const u8, fmtargs: anytype) void {
+    _ = writeTo(File.stderr(), io, fmt, fmtargs);
 }
 
-fn printUsage() void {
+// Sleep helper. interval/timeout values are bounded to i64 in parseSecsToMs,
+// so the cast to the signed Duration is always safe.
+fn sleepMs(io: Io, ms: u64) void {
+    io.sleep(Io.Duration.fromMilliseconds(@intCast(ms)), .awake) catch {};
+}
+
+fn printUsage(io: Io) void {
     const usage =
         \\Usage: bend [options]
         \\
@@ -141,26 +156,28 @@ fn printUsage() void {
         \\  3  Timeout (--wait-until with --timeout)
         \\
     ;
-    std.fs.File.stdout().writeAll(usage) catch {};
+    File.stdout().writeStreamingAll(io, usage) catch {};
 }
 
-fn outputAngle(angle: u16, format: Format) bool {
+fn outputAngle(io: Io, angle: u16, format: Format) bool {
     return switch (format) {
-        .plain => out("{d}\n", .{angle}),
+        .plain => out(io, "{d}\n", .{angle}),
     };
 }
 
-fn outputDelta(delta: i32, format: Format) bool {
+fn outputDelta(io: Io, delta: i32, format: Format) bool {
     return switch (format) {
         .plain => if (delta > 0)
-            out("+{d}\n", .{delta})
+            out(io, "+{d}\n", .{delta})
         else
-            out("{d}\n", .{delta}),
+            out(io, "{d}\n", .{delta}),
     };
 }
 
-pub fn main() u8 {
-    const args = parseArgs(std.heap.page_allocator) catch |e| {
+pub fn main(init: std.process.Init) u8 {
+    const io = init.io;
+
+    const args = parseArgs(init.minimal.args) catch |e| {
         const msg: []const u8 = switch (e) {
             error.MissingArgValue => "missing argument value",
             error.InvalidArgValue => "invalid argument value",
@@ -169,44 +186,44 @@ pub fn main() u8 {
             error.TimeoutRequiresWaitUntil => "--timeout can only be used with --wait-until",
             error.DeltaRequiresWatch => "--delta can only be used with --watch",
         };
-        err("bend: {s}\n", .{msg});
+        err(io, "bend: {s}\n", .{msg});
         return exit_usage;
     };
 
     if (args.help) {
-        printUsage();
+        printUsage(io);
         return exit_ok;
     }
     if (args.show_version) {
-        _ = out("bend {s}\n", .{version});
+        _ = out(io, "bend {s}\n", .{version});
         return exit_ok;
     }
 
     const sensor = Sensor.open() catch {
-        err("Error: could not open lid angle sensor\n", .{});
-        err("Make sure you're on a MacBook and your terminal has Input Monitoring permission.\n", .{});
+        err(io, "Error: could not open lid angle sensor\n", .{});
+        err(io, "Make sure you're on a MacBook and your terminal has Input Monitoring permission.\n", .{});
         return exit_sensor_error;
     };
     defer sensor.close();
 
     return switch (args.mode) {
-        .oneshot => modeOneshot(sensor, args.format),
-        .watch => modeWatch(sensor, args.format, args.interval_ms, args.delta),
-        .wait_until => modeWaitUntil(sensor, args.format, args.threshold.?, args.interval_ms, args.timeout_ms),
+        .oneshot => modeOneshot(io, sensor, args.format),
+        .watch => modeWatch(io, sensor, args.format, args.interval_ms, args.delta),
+        .wait_until => modeWaitUntil(io, sensor, args.format, args.threshold.?, args.interval_ms, args.timeout_ms),
     };
 }
 
-fn modeOneshot(sensor: Sensor, format: Format) u8 {
+fn modeOneshot(io: Io, sensor: Sensor, format: Format) u8 {
     const angle = sensor.read() catch return exit_sensor_error;
-    _ = outputAngle(angle, format);
+    _ = outputAngle(io, angle, format);
     return exit_ok;
 }
 
-fn modeWatch(sensor: Sensor, format: Format, interval_ms: u64, delta: bool) u8 {
+fn modeWatch(io: Io, sensor: Sensor, format: Format, interval_ms: u64, delta: bool) u8 {
     var prev_angle: ?u16 = null;
     while (true) {
         const angle = sensor.read() catch {
-            std.Thread.sleep(interval_ms * std.time.ns_per_ms);
+            sleepMs(io, interval_ms);
             continue;
         };
         const ok = if (delta) blk: {
@@ -215,15 +232,15 @@ fn modeWatch(sensor: Sensor, format: Format, interval_ms: u64, delta: bool) u8 {
             else
                 0;
             prev_angle = angle;
-            break :blk outputDelta(d, format);
-        } else outputAngle(angle, format);
+            break :blk outputDelta(io, d, format);
+        } else outputAngle(io, angle, format);
         if (!ok) return exit_ok;
-        std.Thread.sleep(interval_ms * std.time.ns_per_ms);
+        sleepMs(io, interval_ms);
     }
 }
 
-fn modeWaitUntil(sensor: Sensor, format: Format, threshold: Threshold, interval_ms: u64, timeout_ms: ?u64) u8 {
-    const start_ms = std.time.milliTimestamp();
+fn modeWaitUntil(io: Io, sensor: Sensor, format: Format, threshold: Threshold, interval_ms: u64, timeout_ms: ?u64) u8 {
+    const start = Io.Timestamp.now(io, .awake);
     var wait_above: ?bool = switch (threshold.direction) {
         .above => true,
         .below => false,
@@ -232,12 +249,12 @@ fn modeWaitUntil(sensor: Sensor, format: Format, threshold: Threshold, interval_
 
     while (true) {
         if (timeout_ms) |t| {
-            const elapsed: u64 = @intCast(@max(0, std.time.milliTimestamp() - start_ms));
-            if (elapsed >= t) return exit_timeout;
+            const elapsed_ms = start.durationTo(Io.Timestamp.now(io, .awake)).toMilliseconds();
+            if (elapsed_ms >= @as(i64, @intCast(t))) return exit_timeout;
         }
 
         const angle = sensor.read() catch {
-            std.Thread.sleep(interval_ms * std.time.ns_per_ms);
+            sleepMs(io, interval_ms);
             continue;
         };
 
@@ -245,7 +262,7 @@ fn modeWaitUntil(sensor: Sensor, format: Format, threshold: Threshold, interval_
         // (e.g. current=90, target=140 → wait for above)
         if (wait_above == null) {
             if (angle == threshold.value) {
-                _ = outputAngle(angle, format);
+                _ = outputAngle(io, angle, format);
                 return exit_ok;
             }
             wait_above = angle < threshold.value;
@@ -253,10 +270,10 @@ fn modeWaitUntil(sensor: Sensor, format: Format, threshold: Threshold, interval_
 
         const reached = if (wait_above.?) angle >= threshold.value else angle <= threshold.value;
         if (reached) {
-            _ = outputAngle(angle, format);
+            _ = outputAngle(io, angle, format);
             return exit_ok;
         }
 
-        std.Thread.sleep(interval_ms * std.time.ns_per_ms);
+        sleepMs(io, interval_ms);
     }
 }
